@@ -1,16 +1,338 @@
 ### Authentication
 
-Authentication is an **essential** part of most existing applications. There are a lot of different approaches, strategies, and ways to handle user authorization. What we eventually decide to use depends on the particular application requirements and is strongly associated with their needs.
+Authentication is an **essential** part of most applications. There are a lot of different approaches, strategies, and ways to handle authentication. The approach taken for any project depends on its particular application requirements.  This chapter provides several approaches to authentication that can be adapted to a variety of different requirements.
 
-[Passport](https://github.com/jaredhanson/passport) is the most popular node.js authentication library, well-known by community and successively used in many production applications. It's really simple to integrate this tool with **Nest** framework using dedicated passport utilities. For demonstration purposes, we'll set up both [passport-http-bearer](https://github.com/jaredhanson/passport-http-bearer) and [passport-jwt](https://github.com/themikenicholson/passport-jwt) strategy.
+[Passport](https://github.com/jaredhanson/passport) is the most popular node.js authentication library, well-known by the community and successfully used in many production applications. It's straightforward to integrate this library with a **Nest** application using the built-in Nest-Passport module.
 
-#### Installation
+In this chapter, we'll consider two representative use cases, and implement a complete end-to-end authentication solution for each:
+* Traditional web application with server-side template-driven HTML pages
+* API Server that accepts REST/HTTP requests and returns JSON responses
 
-In order to start the adventure with this library, we have to install a few fundamental packages. Additionally, we'll start by implementing the bearer strategy, and thus we need to install `passport-http-bearer` package.
+#### Server-side web application use case
+
+Let's flesh out our requirements a bit. For this use case, we'll have users authenticate with a username and password. Once authenticated, the server will utilize Express sessions so that the user remains "logged in" until they choose to log out.  We'll show how to set up a protected route that is accessible only to an authenticated user.
+
+Let's start by installing the required packages, and building our basic routes. As a side note, for any Passport strategy you choose (there are many available here), you'll always need the `@nestjs/passport` and `passport` libraries. Then, you'll need to install the strategy-specific package that implements the particular authentication strategy you are building.
+
+Passport provides a [passport-local](https://github.com/jaredhanson/passport-local) library that implements a username/password authentication strategy that suits our needs for this use case. Since we are rendering some basic HTML pages, let's also install the versatile and popular [express-handlebars](https://github.com/ericf/express-handlebars) library to make that a little easier.  To support sessions and convenient user feedback during login, we'll also utilize the express-session and connect-flash packages. With these basic requirements in mind, we can now start by creating a brand new Nest application, and installing the dependencies:
 
 ```bash
-$ npm install --save @nestjs/passport passport passport-http-bearer
+$ nest new auth-sample
+$ cd auth-sample
+$ npm install --save @nestjs/passport passport passport-local express-handlebars express-session connect-flash @types/express
 ```
+
+******************
+NOTE TO REVIEWERS: We haven't typically included front-end code in the documentation so far.  I think it is useful in this case, as a goal is to provide an end-to-end "template" that users can build from, and to add "depth" to the documentation, especially in areas we know people have struggled.  I would like to get feedback on this.  As well, there's a decision as to whether to include the front-end code in-line in the document, or refer the reader to a repo.  As we can always remove it after the fact, I'm including it in-line in this draft so you can see it and comment.
+
+On a related note, this chapter necessarily diverges from "cats", and as such, I'm proposing a complete repo that can be cloned. Users can refer directly to the repo to run the code documented here.
+****************
+
+Let's start by taking care of the templates we'll use to exercise our authentication subsystem.  Following a standard project structure, create the following folder structure:
+
+src
+&nbsp;&nbsp;public
+&nbsp;&nbsp;&nbsp;&nbsp;views
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;layouts
+
+<!--
+<div class="file-tree">
+  <div class="item">src</div>
+  <div class="children">
+    <div class="item">public</div>
+    <div class="children">
+      <div class="item">views</div>
+      <div class="children">
+        <div class="item">layouts</div>
+      </div>
+    </div>
+  </div>
+</div>
+-->
+
+Now, we'll create the following handlebars templates, and configure Nest to use express-handlebars as our view engine.  Refer [here]() for more on handlebars template language.
+
+###### Main layout
+
+Create `main.hbs` in the layouts folder, and add the following code.  This is the outermost container for our views.  Note the `{{{ body}}}` line, which is where each individual view is inserted.  This structure allows us to set up global styles.  In this case, we're taking advantage of Google's well-known [material design lite](https://github.com/google/material-design-lite) component library to style our minimal UI.
+```html
+<!-- src/public/views/layouts/main.hbs -->
+<!DOCTYPE html>
+<html>
+
+<head>
+  <script src="https://code.getmdl.io/1.3.0/material.min.js"></script>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+  <link rel="stylesheet" href="https://code.getmdl.io/1.3.0/material.indigo-pink.min.css">
+  <style>
+    .mdl-layout__content {
+      padding: 24px;
+      flex: none;
+    }
+
+    .mdl-textfield__error {
+      visibility: visible;
+      padding: 5px;
+    }
+
+    .mdl-card {
+      padding-bottom: 10px;
+      min-width: 500px;
+    }
+  </style>
+</head>
+
+<body>
+  {{{ body }}}
+</body>
+
+</html>
+```
+
+###### Home page
+
+Create `home.hbs` in the views folder, and add the following code.  This is the page users land on after authenticating.
+```html
+<!-- src/public/views/home.hbs -->
+<div class="mdl-layout mdl-js-layout mdl-color--grey-100">
+  <main class="mdl-layout__content">
+    <div class="mdl-card mdl-shadow--6dp">
+      <div class="mdl-card__title mdl-color--primary mdl-color-text--white">
+        <h2 class="mdl-card__title-text">Welcome {{ user.username }}!</h2>
+      </div>
+      <div class="mdl-card__supporting-text">
+        <div class="mdl-card__actions mdl-card--border">
+          <a class="mdl-button" href='/profile'>Get
+            Profile</a>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+```
+###### Login page
+
+Create `login.hbs` in the views folder, and add the following code.  This is the login form
+```html
+<!-- src/public/views/login.hbs -->
+<div class="mdl-layout mdl-js-layout mdl-color--grey-100">
+  <main class="mdl-layout__content">
+    <div class="mdl-card mdl-shadow--6dp">
+      <div class="mdl-card__title mdl-color--primary mdl-color-text--white">
+        <h2 class="mdl-card__title-text">Nest Cats</h2>
+      </div>
+      <div class="mdl-card__supporting-text">
+        <form action="/login" method="post">
+          <div class="mdl-textfield mdl-js-textfield">
+            <input class="mdl-textfield__input" type="text" name="username" id="username" />
+            <label class="mdl-textfield__label" for="username">Username</label>
+          </div>
+          <div class="mdl-textfield mdl-js-textfield">
+            <input class="mdl-textfield__input" type="password" name="password" id="password" />
+            <label class="mdl-textfield__label" for="password">Password</label>
+          </div>
+          <div class="mdl-card__actions mdl-card--border">
+            <button class="mdl-button mdl-button--colored mdl-js-button mdl-js-ripple-effect">Log In</button>
+            <span class="mdl-textfield__error">{{ message }}
+          </div>
+        </form>
+      </div>
+    </div>
+  </main>
+</div>
+```
+###### Profile page
+
+Create `profile.hbs` in the views folder and add the following code.  This page displays details about the logged in user.  It's rendered on our protected route.
+```html
+<!-- src/public/views/profile.hbs -->
+<div class="mdl-layout mdl-js-layout mdl-color--grey-100">
+  <main class="mdl-layout__content">
+    <div class="mdl-card mdl-shadow--6dp">
+      <div class="mdl-card__title mdl-color--primary mdl-color-text--white">
+        <h2 class="mdl-card__title-text">About {{ user.username }}</h2>
+      </div>
+      <div>
+        <figure><img src="http://lorempixel.com/400/200/cats/{{user.pet.picId}}">
+          <figcaption>{{user.username}}'s friend {{user.pet.name}}</figcaption>
+        </figure>
+        <div class="mdl-card__actions mdl-card--border">
+          <a class="mdl-button" href='/logout'>Log Out</a>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+```
+
+###### Set up view engine
+Now let's tell Nest to use express-handlebars as our view engine.  Modify the `main.ts` file so that it looks like this:
+````typescript
+// main.ts
+import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
+import { join } from 'path';
+import { AppModule } from './app.module';
+import * as exphbs from 'express-handlebars';
+
+async function bootstrap() {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const viewsPath = join(__dirname, '/public/views');
+  app.engine('.hbs', exphbs({ extname: '.hbs', defaultLayout: 'main' }));
+  app.set('views', viewsPath);
+  app.set('view engine', '.hbs');
+
+  await app.listen(3000);
+}
+bootstrap();
+````
+
+###### Authentication routes
+The final step in this section is setting up our routes.  Modify `src\app.controller.ts` so that it looks like this:
+````typescript
+// src/app.controller.ts
+import { Controller, Get, Post, Request } from '@nestjs/common';
+import { Response } from 'express';
+
+@Controller()
+export class AppController {
+  @Get('/')
+  index(@Request() req, @Res() res: Response) {
+    res.render('login');
+  }
+
+  @Post('/login')
+  login(@Request() req, @Res() res: Response) {
+    res.redirect('/home');
+  }
+
+  @Get('/home')
+  getHome(@Request() req, @Res() res: Response) {
+    res.render('home');
+  }
+
+  @Get('/profile')
+  getProfile(@Request() req, @Res() res: Response) {
+    res.render('profile');
+  }
+
+  @Get('/logout')
+  logout(@Request() req, @Res() res: Response) {
+    res.redirect('/');
+  }
+}
+````
+
+At this point, you should be able to browse to <a href="http://localhost:3000/">http://locahost:3000</a> and click through the basic UI.
+
+###### Implementing Passport strategies
+
+We're now ready to implement the authorization feature. Let's start with an overview of the process used for **any** Passport strategy.  It's helpful to think of Passport as a mini framework in itself. The beauty of the framework is that it abstracts authentication into a few basic things that you customize based on the strategy you're implementing.  The nest-passport module wraps this framework in a Nest style package.  In vanilla passport, you configure a strategy by providing two things:
+1. A set of options that are specific to that strategy.
+2. A "verify callback", which is where you tell Passport how to interact with your user store (where you manage user accounts) and either create or verify whether a user exists, and if their credentials are valid.
+
+In Nest, you achieve these functions by extending the `PassportStrategy` class.  You pass options by calling the `super()` method in your subclass.  You provide the verify callback by implementing a `validate` method in your subclass.
+
+As mentioned, we'll utilize the passport-local strategy for this use-case.  We'll do that below.  Start by generating an `auth module` and in it, an `auth service`:
+
+````bash
+$ nest g module auth
+$ nest g service auth
+````
+
+As we implement the `auth service`, you'll see that we'll want to also have a `users service`, so let's generate that module and service now:
+
+````bash
+$ nest g module users
+$ nest g service users
+````
+
+Replace the default contents of these generated files as shown below.
+
+In our prototype, the `UsersService` simply maintains a hard-coded in-memory list of users, and a method to retrieve one by username.  In a real app, this is where you'd build you user model and persistence layer, using your library of choice (e.g., TypeORM, Sequelize, etc.).
+
+````typescript
+// src/users/users.service.ts
+import { Injectable } from '@nestjs/common';
+
+@Injectable()
+export class UsersService {
+  private readonly users;
+
+  constructor() {
+    this.users = [
+      {
+        username: 'john',
+        password: 'changeme',
+        pet: { name: 'alfred', picId: 1 },
+      },
+      {
+        username: 'chris',
+        password: 'secret',
+        pet: { name: 'gopher', picId: 2 },
+      },
+      {
+        username: 'maria',
+        password: 'guess',
+        pet: { name: 'jenny', picId: 3 },
+      },
+    ];
+  }
+
+  async findOne(username): Promise<any> {
+    return this.users.filter(user => user.username === username)[0];
+  }
+}
+````
+
+In the UsersModule, the only change is to add the `UsersService` to the exports array of the `@Module` decorator so that it is visible outside this module (we'll want to use it in our `AuthService`).
+````typescript
+import { Module } from '@nestjs/common';
+import { UsersService } from './users.service';
+
+@Module({
+  providers: [UsersService],
+  exports: [UsersService],
+})
+export class UsersModule {}
+````
+
+Our `AuthService` has the job of retrieving a user and verifying the password.  Of course in a real application, you wouldn't store a password in plain text. You'd instead use a library like [bcrypt](), with a salted one-way hash algorithm. With that approach, you'd only store hashed passwords, and then compare the stored password to a hashed version of the **incoming** password, thus never storing or exposing user passwords in plain text. To keep our prototype simple, we violate that absolute mandate and use plain text.  **Don't do this in your real app!**
+
+The Passport library expects us to return a full user if the validation succeeds, or a null if it fails (failure could be either the user is not found, or the password does not match). Upon successful validation, Passport then takes care of a few details for us, which we'll explore later on in the Sessions section.
+
+````typescript
+// src/auth/auth.service.ts
+import { Injectable } from '@nestjs/common';
+import { UsersService } from '../users/users.service';
+
+@Injectable()
+export class AuthService {
+  constructor(private readonly usersService: UsersService) {}
+
+  async validateUser(username, password): Promise<any> {
+    const user = await this.usersService.findOne(username);
+    return user && user.password === password ? user : null;
+  }
+}
+````
+
+And finally, we just need to update our `AuthModule` so it imports the `UsersModule`.
+
+````typescript
+// src/auth/auth.module.ts
+import { Module } from '@nestjs/common';
+import { AuthService } from './auth.service';
+import { UsersModule } from '../users/users.module';
+
+@Module({
+  imports: [UsersModule],
+  providers: [AuthService],
+})
+export class AuthModule {}
+````
+Our app will function now, but remains slightly broken until we complete a few more steps.  You can navigate to <a href="http://localhost:3000/">http://locahost:3000</a> and still move around without logging in (after all, we haven't implemented our Passport Local strategy yet.  We'll get there momentarily).  Notice that if you **do** login (refer to the `UsersService` for username/passwords you can test with), the profile page now provides some (but not all) information about a "logged in" user.
+
 
 #### Bearer strategy
 
